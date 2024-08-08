@@ -1,0 +1,8 @@
+streamlit
+python-dotenv
+pymupdf
+pandas
+Pillow
+requests
+openpyxl
+openai
