@@ -1,151 +1,281 @@
 import os
-import tempfile
 import streamlit as st
-from dotenv import load_dotenv
-import zipfile
-import fitz  # PyMuPDF
 import pandas as pd
-from PIL import Image as PILImage
-import io
-import requests
-import base64
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.enum.text import PP_ALIGN
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.dml.color import RGBColor
 from openai import OpenAI # Configurar la clave API de OpenAI
-
+from dotenv import load_dotenv
 
 # Cargar variables de entorno desde .env
 load_dotenv()
 api_key = os.getenv('OPENAI_API_KEY')
 
-if not api_key:
-    st.error("API Key no encontrada. Asegúrate de que el archivo .env esté correctamente configurado.")
-    st.stop()
+client = OpenAI(api_key=api_key)
 
-def encode_image(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
+def generar_propuesta_resolucion(filas):
+    resultados = []
+    for _, fila in filas.iterrows():
+        prompt = f"""
+A continuación se presenta la información de un estudiante. Con base en esta información, por favor genera una "Propuesta Resolución" que indique si se aprueba o rechaza la solicitud de beca, y los detalles de la resolución. Usa las siguientes condiciones para tomar la decisión:
 
-def analyze_image(base64_image, api_key):
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }
+1. Si la deuda vencida en el sistema es 0, rechaza la solicitud porque no hay deuda a cubrir.
+2. Si el PPE es menor a 0.5, rechaza la solicitud porque no cumple con el requisito mínimo.
+3. Si los documentos han sido validados por una Trabajadora Social y el estudiante tiene una deuda vencida mayor que 0, aprueba la solicitud con los detalles correspondientes.
+4. Si el estudiante ha recibido beneficios anteriormente, verifica si hay algún incumplimiento relacionado y decide en consecuencia.
 
-    payload = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Eres un asistente social virtual especializado en la revisión de documentos escaneados. Tu tarea es analizar imágenes de documentos como liquidaciones, finiquitos, licencias médicas, documentos de identidad y documentos firmados con sellos. Debes identificar el tipo de documento y extraer la siguiente información: nombres completos de las personas involucradas, fechas importantes (fechas de emisión, vencimiento, consultas médicas, etc.), diagnósticos médicos (en el caso de licencias médicas o certificados médicos), instituciones emisoras o relacionadas con el documento, firmas y sellos presentes en los documentos, y detalles adicionales relevantes (como medicamentos, detalles del tratamiento, etc.). Proporciona la información extraída en un formato estructurado y claro. Aquí tienes un ejemplo de cómo deberías presentar los resultados: - Tipo de documento: [Tipo de documento] - Nombre completo: [Nombre] - Fecha de emisión: [Fecha] - Institución emisora: [Institución] - Diagnóstico médico: [Diagnóstico] (si aplica) - Medicamentos y dosis: [Detalles] (si aplica) - Firmas y sellos: [Descripción] - Otros detalles relevantes: [Detalles] A continuación, adjunto una imagen del documento para que la revises: [Inserta aquí la imagen del documento]"
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}"
-                        }
-                    }
-                ]
-            }
-        ],
-        "max_tokens": 300
-    }
+**Información del Estudiante:**
 
-    response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+- Nombre completo: {fila['Nombre completo']}
+- RUT: {fila['Folder']}
+- Sede: {fila['Sede']}
+- Carrera: {fila['Carrera']}
+- Vigencia con cursos inscritos: {fila['Vigencia con cursos inscritos']}
+- Año y Semestre de ingreso: {fila['Año y Semestre de ingreso']}
+- Motivo solicitud: {fila['Motivo solicitud.']}
+- ¿Ha recibido beneficios anteriormente? ¿Cuál?: {fila['¿Ha recibido beneficios anteriormente? ¿Cuál?']}
+- Última fecha en que se entregó el Beneficio: {fila['Última fecha en que se entregó el Beneficio']}
+- Deuda vencida en sistema: {fila['Deuda vencida en sistema']}
+- Motivo, Breve explicación de la situación del estudiante: {fila['Motivo, Breve explicación de la situación del estudiante, por la cual se solicita la Beca.']}
+- PPE: {fila['PPE']}
+- Análisis_concatenado: {fila['Análisis_concatenado']}
+
+Por favor, genera una respuesta en formato de tabla con las siguientes columnas, incluyendo el encabezado, usando guiones (-) como delimitadores:
+
+Propuesta Resolución-RESOLUCIÓN-MONTO DE LA BECA-MOTIVO DEL CASO-DOCUMENTOS
+
+**Ejemplo:**
+
+Propuesta Resolución-RESOLUCIÓN-MONTO DE LA BECA-MOTIVO DEL CASO-DOCUMENTOS
+Aprobada-La solicitud de beca se aprueba...-Monto a determinar según normativa-El estudiante solicita una beca porque...-Carta de solicitud de beca; Cartola Hogar; Certificado de remuneraciones; FICHA SOCIOECONOMICA
+
+**Asegúrate de que cada valor esté correctamente delimitado por guiones y de que no haya espacios adicionales antes o después de los guiones. Incluye solo las 5 columnas especificadas y usa punto y coma para separar múltiples documentos en la columna DOCUMENTOS.**
+"""
+
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Eres un asistente social."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        respuesta_fila = completion.choices[0].message.content.strip()
+        print(f"Raw GPT response: {respuesta_fila}")
+
+        # Eliminar el encabezado de la respuesta
+        if 'Propuesta Resolución' in respuesta_fila:
+            respuesta_fila = respuesta_fila.split('\n')[1]
+
+        # Dividir la fila en columnas usando el guion "-"
+        columnas = respuesta_fila.split('-')
+
+        # Si hay más de 5 columnas, combinar las columnas extra en la última columna
+        if len(columnas) > 5:
+            columnas[4] = '-'.join(columnas[4:])  # Combina columnas extra en la columna de DOCUMENTOS
+            columnas = columnas[:5]  # Mantén solo las primeras 5 columnas
+
+        # Si hay menos columnas de las esperadas, agregar columnas vacías
+        while len(columnas) < 5:
+            columnas.append('')
+
+        # Convertir las columnas a string
+        columnas = [str(valor).strip() for valor in columnas]
+
+        # Agregar las columnas a la lista de resultados
+        resultados.append(columnas)
+
+    return resultados  # <-- Devuelve la lista de listas
+
+
+def add_textbox(slide, left, top, width, height, text, font_size=Pt(14), bold=False, font_color=RGBColor(0, 0, 0), alignment=PP_ALIGN.LEFT):
+    textbox = slide.shapes.add_textbox(left, top, width, height)
+    text_frame = textbox.text_frame
+    p = text_frame.add_paragraph()
+    p.text = text
+    p.font.size = font_size
+    p.font.bold = bold
+    p.font.color.rgb = font_color
+    p.alignment = alignment
+
+def create_header_background(slide, left, top, width, height):
+    background = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    background.fill.solid()
+    background.fill.fore_color.rgb = RGBColor(255, 192, 0)  # Light blue
+    background.line.color.rgb = RGBColor(142, 180, 227)  # Sky blue border
+
+def create_card(slide, left, top, width, height, title, subtitles, contents, image_path=None):
+    card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    card.fill.solid()
+    card.fill.fore_color.rgb = RGBColor(255, 255, 255)  # White
+    card.line.color.rgb = RGBColor(200, 200, 200)  # Light gray border
+
+    # Add title
+    title_box = slide.shapes.add_textbox(left + Inches(0.25), top + Inches(0.25), width - Inches(0.5), Inches(0.5))
+    title_box.text_frame.text = title
+    title_box.text_frame.paragraphs[0].font.size = Pt(18)
+    title_box.text_frame.paragraphs[0].font.bold = True
+
+    # Add subtitles and contents
+    content_top = top + Inches(0.75)
+    for subtitle, content in zip(subtitles, contents):
+        subtitle_box = slide.shapes.add_textbox(left + Inches(0.25), content_top, width - Inches(0.5), Inches(0.3))
+        subtitle_box.text_frame.text = subtitle
+        subtitle_box.text_frame.paragraphs[0].font.size = Pt(14)
+        subtitle_box.text_frame.paragraphs[0].font.bold = True
+        content_top += Inches(0.3)
+
+        content_box = slide.shapes.add_textbox(left + Inches(0.25), content_top, width - Inches(0.5), Inches(1))
+        content_box.text_frame.word_wrap = True
+        content_box.text_frame.text = content
+        for paragraph in content_box.text_frame.paragraphs:
+            paragraph.font.size = Pt(12)
+        content_top += Inches(1)
+
+def create_button(slide, left, top, width, height, text, color):
+    button = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    button.fill.solid()
+    button.fill.fore_color.rgb = color
+    button.line.color.rgb = color
+    button.text_frame.text = text
+    button.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)  # White text
+
+def create_slide_from_row(prs, row):
+    # Create slide
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
+
+    # Add header background
+    create_header_background(slide, Inches(0.25), Inches(0.2), Inches(12.9), Inches(1.6))
+
+    # Add header information
+    add_textbox(slide, Inches(0.5), Inches(0.2), Inches(4), Inches(0.5),
+                f"{row.get('Nombre completo', 'N/A')}\n{row.get('Folder', 'N/A')}",
+                font_size=Pt(14), bold=True)
+
+    add_textbox(slide, Inches(5), Inches(0.2), Inches(4), Inches(0.5),
+                f"{row.get('Carrera', 'N/A')}\n{row.get('Sede', 'N/A')}",
+                font_size=Pt(14), bold=True)
+
+    add_textbox(slide, Inches(9.5), Inches(0.2), Inches(3.5), Inches(0.5),
+                f"MATRÍCULA 2024-1\nCON CURSOS: {row.get('Vigencia con cursos inscritos', 'N/A')}",
+                font_size=Pt(14), bold=True, alignment=PP_ALIGN.RIGHT)
+
+    # Add timeline
+    add_textbox(slide, Inches(0.7), Inches(1), Inches(2), Inches(0.3),
+                f"Ingresa: {row.get('Año y Semestre de ingreso', 'N/A')}",
+                font_size=Pt(10), font_color=RGBColor(255, 255, 255))
     
-    # Verificar y mostrar detalles del error
-    if response.status_code != 200:
-        st.error(f"Error: {response.status_code} - {response.text}")
-        return None
-    
-    response_data = response.json()
-    if 'error' in response_data:
-        st.error(f"API Error: {response_data['error']['message']}")
-    
-    return response_data
+    # Add timeline
+    add_textbox(slide, Inches(5), Inches(1), Inches(2), Inches(0.3),
+                f"MOTIVO DEL CASO:\n {row.get('MOTIVO DEL CASO', 'N/A')}",
+                font_size=Pt(10), font_color=RGBColor(255, 255, 255))
 
-def convert_pdf_page_to_image(pdf_path, page_num):
-    pdf_document = fitz.open(pdf_path)
-    page = pdf_document.load_page(page_num)
-    pix = page.get_pixmap()
-    img = PILImage.open(io.BytesIO(pix.tobytes()))
-    return img
+    add_textbox(slide, Inches(10.5), Inches(1), Inches(2.5), Inches(0.3),
+                f"Envía Solicitud: {row.get('Hora de inicio', 'N/A')}",
+                font_size=Pt(10), font_color=RGBColor(255, 255, 255), alignment=PP_ALIGN.RIGHT)
 
-def process_pdfs_in_zip(zip_path, output_dir, api_key):
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(output_dir)
+    # Create three cards
+    card_width = Inches(4)
+    card_height = Inches(5)
+    spacing = Inches(0.5)
 
-    results = []
+# First card content
+    subtitles_list1 = ["MOTIVO", "MOTIVO DEL CASO", "DOCUMENTOS"]  # Agrega "MOTIVO DEL CASO"
+    contents_list1 = [
+        row.get('Motivo solicitud.', 'N/A'),
+        row.get('DOCUMENTOS', 'No hay información disponible')
+    ]
 
-    for root, dirs, files in os.walk(output_dir):
-        for file in files:
-            if file.endswith('.pdf'):
-                pdf_path = os.path.join(root, file)
-                folder_name = os.path.basename(os.path.dirname(pdf_path))
-                st.write(f"Processing {pdf_path}...")
+    card_left = Inches(0.1) + 0 * (card_width + spacing)
+    card_top = Inches(2)
+    create_card(slide, card_left, card_top, card_width, card_height,
+                "SOLICITA", subtitles_list1, contents_list1)
 
-                pdf_document = fitz.open(pdf_path)
-                for page_num in range(len(pdf_document)):
-                    img = convert_pdf_page_to_image(pdf_path, page_num)
-                    temp_img_path = os.path.join(root, f"temp_image_page_{page_num}.png")
-                    img.save(temp_img_path)
+    # Extract FUAS information safely
+    analisis = str(row.get('Análisis_concatenado', ''))
+    fuas_info = 'No especificado'
+    if 'Postulación FUAS:' in analisis:
+        fuas_info = analisis.split('Postulación FUAS:')[1].split('.')[0].strip()
 
-                    base64_image = encode_image(temp_img_path)
-                    result = analyze_image(base64_image, api_key)
-                    
-                    if result and 'choices' in result and len(result['choices']) > 0:
-                        analysis = result['choices'][0]['message']['content']
-                    else:
-                        analysis = "Analysis failed"
+    subtitles_list2 = ["ANTECEDENTES ECONÓMICOS", "ANTECEDENTES ACADÉMICOS"]
+    contents_list2 = [
+        f"Beneficio: {row.get('¿Ha recibido beneficios anteriormente? ¿Cuál?', 'N/A')}\n"
+        f"Deuda: ${row.get('Deuda vencida en sistema', 'N/A')}\n"
+        f"Postulación a FUAS: {fuas_info}\n"
+        f"Arancel: ${row.get('Monto cuota de Arancel', 'N/A')}\n"
+        f"Matrícula: ${row.get('Monto valor de matrícula', 'N/A')}",
+        f"Avance Curricular: {row.get('Avance curricular (%)', 'N/A')}\n"
+        f"PPS: {row.get('PPS', 'N/A')}\n"
+        f"RSH: {row.get('Registro Social de Hogares (RSH) o Nivel Socioeconómico (NSE)', 'N/A')}\n"
+        f"Promedio Ponderado Evaluación: {row.get('PPE', 'N/A')}"
+    ]
 
-                    results.append({
-                        "Folder": folder_name,
-                        "File": file,
-                        "Page": page_num,
-                        "Analysis": analysis
-                    })
+    # Extract resolution information safely
+    resolucion = row.get('RESOLUCIÓN', 'No hay información disponible')
+    monto_beca = row.get('MONTO DE LA BECA', 'No especificado')
 
-    return results
+    subtitles_list3 = ["RESOLUCIÓN", "MONTO DE LA BECA"]
+    contents_list3 = [resolucion, monto_beca]
 
-def save_results_to_excel(results, output_excel_path):
-    df = pd.DataFrame(results)
-    df.to_excel(output_excel_path, index=False)
+    button_left = card_left + Inches(0.25)
+    button_top = card_top + card_height - Inches(1)
+    button_width = card_width - Inches(0.5)
+    button_height = Inches(0.5)
+    create_button(slide, button_left, button_top, button_width, button_height,
+                  "Solicitud", RGBColor(13, 34, 60))  # Indigo color
 
-st.title("Análisis de Documentos PDF con OpenAI y Streamlit")
-st.write(f"API Key: {api_key[:20]}...")
+    card_left = Inches(0.1) + 1 * (card_width + spacing)
+    create_card(slide, card_left, card_top, card_width, card_height,
+                "ANTECEDENTES", subtitles_list2, contents_list2)
 
-uploaded_file = st.file_uploader("Sube tu archivo ZIP", type=["zip"])
+    button_left = card_left + Inches(0.25)
+    create_button(slide, button_left, button_top, button_width, button_height,
+                  "Revisión", RGBColor(13, 34, 60))  # Teal color
+
+    card_left = Inches(0.1) + 2 * (card_width + spacing)
+    create_card(slide, card_left, card_top, card_width, card_height,
+                "RESOLUCIÓN", subtitles_list3, contents_list3)
+
+    button_left = card_left + Inches(0.25)
+    create_button(slide, button_left, button_top, button_width, button_height,
+                  "Resolución", RGBColor(13, 34, 60))   # Blue color
+
+st.title('Generador de Propuestas de Resolución y Presentaciones')
+
+uploaded_file = st.file_uploader("Carga un archivo Excel", type=["xlsx"])
 
 if uploaded_file is not None:
-    temp_dir = tempfile.gettempdir()
-    zip_path = os.path.join(temp_dir, uploaded_file.name)
-    
-    with open(zip_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    output_dir = os.path.join(temp_dir, "extracted_pdfs")
-    output_excel_path = os.path.join(temp_dir, "results.xlsx")
+    df = pd.read_excel(uploaded_file)
 
-    with st.spinner('Procesando PDFs...'):
-        results = process_pdfs_in_zip(zip_path, output_dir, api_key)
-        save_results_to_excel(results, output_excel_path)
+    st.write('Datos del archivo cargado:')
+    st.dataframe(df)
 
-    # Leer el archivo de resultados y concatenar análisis por folder
-    data = pd.read_excel(output_excel_path, sheet_name='Sheet1')
-    result = data.groupby('Folder')['Analysis'].apply(lambda x: ' '.join(x)).reset_index()
-    result.columns = ['Folder', 'Análisis_concatenado']
-    
-    # Guardar los resultados finales en Excel
-    final_output_path = os.path.join(temp_dir, "final_results.xlsx")
-    result.to_excel(final_output_path, index=False)
+    propuestas_resolucion = generar_propuesta_resolucion(df)
 
-    st.success(f"Análisis completado. Los resultados se han guardado en {final_output_path}.")
-    st.download_button(
-        label="Descargar resultados en Excel",
-        data=open(final_output_path, "rb").read(),
-        file_name="final_results.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # Agregar los resultados al dataframe original
+    df['Propuesta Resolución'], df['RESOLUCIÓN'], df['MONTO DE LA BECA'], df['MOTIVO DEL CASO'], df['DOCUMENTOS'] = zip(*propuestas_resolucion)
 
+    # Crear un nuevo archivo Excel con los resultados
+    excel_output = 'propuestas_resolucion.xlsx'
+    df.to_excel(excel_output, index=False)
+
+    # Crear una presentación de PowerPoint
+    prs = Presentation()
+    prs.slide_width = Inches(13.33)
+    prs.slide_height = Inches(7.5)
+    for _, row in df.iterrows():
+        create_slide_from_row(prs, row)
+
+    ppt_output = 'propuestas_resolucion.pptx'
+    prs.save(ppt_output)
+
+    st.success('¡Propuestas de resolución generadas y guardadas!')
+
+    with open(excel_output, 'rb') as excel_file:
+        st.download_button('Descargar archivo Excel', data=excel_file, file_name=excel_output)
+
+    with open(ppt_output, 'rb') as ppt_file:
+        st.download_button('Descargar presentación PowerPoint', data=ppt_file, file_name=ppt_output)
 
