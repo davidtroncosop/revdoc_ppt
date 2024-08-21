@@ -129,7 +129,10 @@ def create_card(slide, left, top, width, height, title, subtitles, contents, ima
 
         content_box = slide.shapes.add_textbox(left + Inches(0.25), content_top, width - Inches(0.5), Inches(1))
         content_box.text_frame.word_wrap = True
-        content_box.text_frame.text = content
+        if isinstance(content, str):
+            content_box.text_frame.text = content
+        else:
+            content_box.text_frame.text = str(content)
         for paragraph in content_box.text_frame.paragraphs:
             paragraph.font.size = Pt(12)
         content_top += Inches(1)
@@ -261,10 +264,12 @@ if uploaded_file is not None:
     excel_output = 'propuestas_resolucion.xlsx'
     df.to_excel(excel_output, index=False)
 
-    # Crear una presentación de PowerPoint
+    # Crea la presentación de PowerPoint
     prs = Presentation()
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
+
+    # Crea una diapositiva para cada fila
     for _, row in df.iterrows():
         create_slide_from_row(prs, row)
 
