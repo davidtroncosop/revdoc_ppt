@@ -21,35 +21,32 @@ def generar_propuesta_resolucion(filas):
         prompt = f"""
 A continuación se presenta la información de un estudiante. Con base en esta información, por favor genera una "Propuesta Resolución" que indique si se aprueba o rechaza la solicitud de beca, y los detalles de la resolución. Usa las siguientes condiciones para tomar la decisión:
 
-1. Si la deuda vencida en el sistema es 0, rechaza la solicitud porque no hay deuda a cubrir.
-2. Si el PPE es menor a 0.5, rechaza la solicitud porque no cumple con el requisito mínimo.
+1. Si el PPE es menor a 0.5, rechaza la solicitud porque no cumple con el requisito mínimo.
+2. Si la deuda vencida en el sistema es 0, rechaza la solicitud porque no hay deuda a cubrir.
 3. Si los documentos han sido validados por una Trabajadora Social y el estudiante tiene una deuda vencida mayor que 0, aprueba la solicitud con los detalles correspondientes.
 4. Si el estudiante ha recibido beneficios anteriormente, verifica si hay algún incumplimiento relacionado y decide en consecuencia.
 
-**Información del Estudiante:**
-
-- Nombre completo: {fila['Nombre completo']}
-- RUT: {fila['Folder']}
-- Sede: {fila['Sede']}
-- Carrera: {fila['Carrera']}
-- Vigencia con cursos inscritos: {fila['Vigencia con cursos inscritos']}
-- Año y Semestre de ingreso: {fila['Año y Semestre de ingreso']}
-- Motivo solicitud: {fila['Motivo solicitud.']}
-- ¿Ha recibido beneficios anteriormente? ¿Cuál?: {fila['¿Ha recibido beneficios anteriormente? ¿Cuál?']}
-- Última fecha en que se entregó el Beneficio: {fila['Última fecha en que se entregó el Beneficio']}
-- Deuda vencida en sistema: {fila['Deuda vencida en sistema']}
-- Motivo, Breve explicación de la situación del estudiante: {fila['Motivo, Breve explicación de la situación del estudiante, por la cual se solicita la Beca.']}
-- PPE: {fila['PPE']}
-- Análisis_concatenado: {fila['Análisis_concatenado']}
+Información del Estudiante:
+PPE: {fila['PPE']}
+Nombre completo: {fila['Nombre completo']}
+RUT: {fila['Folder']}
+Sede: {fila['Sede']}
+Carrera: {fila['Carrera']}
+Vigencia con cursos inscritos: {fila['Vigencia con cursos inscritos']}
+Año y Semestre de ingreso: {fila['Año y Semestre de ingreso']}
+Motivo solicitud: {fila['Motivo solicitud.']}
+¿Ha recibido beneficios anteriormente? ¿Cuál?: {fila['¿Ha recibido beneficios anteriormente? ¿Cuál?']}
+Última fecha en que se entregó el Beneficio: {fila['Última fecha en que se entregó el Beneficio']}
+Deuda vencida en sistema: {fila['Deuda vencida en sistema']}
+Motivo, Breve explicación de la situación del estudiante: {fila['Motivo, Breve explicación de la situación del estudiante, por la cual se solicita la Beca.']}
+Análisis_concatenado: {fila['Análisis_concatenado']}
 
 Por favor, genera una respuesta en formato de tabla con las siguientes columnas, incluyendo el encabezado, usando guiones (-) como delimitadores:
-
 Propuesta Resolución-RESOLUCIÓN-MONTO DE LA BECA-MOTIVO DEL CASO-DOCUMENTOS
-
-**Ejemplo:**
-
+Ejemplo:
 Propuesta Resolución-RESOLUCIÓN-MONTO DE LA BECA-MOTIVO DEL CASO-DOCUMENTOS
 Aprobada-La solicitud de beca se aprueba...-Monto a determinar según normativa-El estudiante solicita una beca porque...-Carta de solicitud de beca; Cartola Hogar; Certificado de remuneraciones; FICHA SOCIOECONOMICA
+Rechazada-La solicitud de beca se rechaza porque el estudiante no cumple con el requisito mínimo de PPE.-N/A-El estudiante no cumple con el requisito mínimo de PPE.-N/A
 
 **Asegúrate de que cada valor esté correctamente delimitado por guiones y de que no haya espacios adicionales antes o después de los guiones. Incluye solo las 5 columnas especificadas y usa punto y coma para separar múltiples documentos en la columna DOCUMENTOS.**
 """
@@ -205,16 +202,16 @@ def create_slide_from_row(prs, row):
     subtitles_list2 = ["ANTECEDENTES ECONÓMICOS", "ANTECEDENTES ACADÉMICOS"]
     contents_list2 = [
         f"Beneficio: {row.get('¿Ha recibido beneficios anteriormente? ¿Cuál?', 'N/A')}\n"
-        f"Deuda: ${row.get('Deuda vencida en sistema', 'N/A')}\n"
+        f"Deuda: ${'{:,}'.format(row.get('Deuda vencida en sistema', 0.0))}\n"
         f"Postulación a FUAS: {fuas_info}\n"
-        f"Arancel: ${row.get('Monto cuota de Arancel', 'N/A')}\n"
-        f"Matrícula: ${row.get('Monto valor de matrícula', 'N/A')}",
+        f"Arancel: ${'{:,}'.format(row.get('Monto cuota de Arancel', 0.0))}\n"
+        f"Matrícula: ${'{:,}'.format(row.get('Monto valor de matrícula', 0.0))}",
         f"Avance Curricular: {row.get('Avance curricular (%)', 'N/A')}\n"
         f"PPS: {row.get('PPS', 'N/A')}\n"
         f"RSH: {row.get('Registro Social de Hogares (RSH) o Nivel Socioeconómico (NSE)', 'N/A')}\n"
-        f"Promedio Ponderado Evaluación: {row.get('PPE', 'N/A')}"
+        f"Promedio Ponderado Evaluación: {'{:.2f}'.format(row.get('PPE', 0.0))}"
     ]
-
+    
     # Extract resolution information safely
     resolucion = row.get('RESOLUCIÓN', 'No hay información disponible')
     monto_beca = row.get('MONTO DE LA BECA', 'No especificado')
