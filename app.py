@@ -182,10 +182,10 @@ def create_slide_from_row(prs, row):
     spacing = Inches(0.5)
 
 # First card content
-    subtitles_list1 = ["MOTIVO", "MOTIVO DEL CASO", "DOCUMENTOS"]  # Agrega "MOTIVO DEL CASO"
+    subtitles_list1 = ["MOTIVO", "DOCUMENTOS"]  # Agrega "MOTIVO DEL CASO"
     contents_list1 = [
         row.get('Motivo solicitud.', 'N/A'),
-        row.get('DOCUMENTOS', 'No hay información disponible')
+        row.get('Análisis_concatenado', 'No hay información disponible')
     ]
 
     card_left = Inches(0.1) + 0 * (card_width + spacing)
@@ -214,7 +214,8 @@ def create_slide_from_row(prs, row):
     
     # Extract resolution information safely
     resolucion = row.get('RESOLUCIÓN', 'No hay información disponible')
-    monto_beca = row.get('MONTO DE LA BECA', 'No especificado')
+    monto_beca = f"${'{:,}'.format(row.get('Plan de Retención', 0.0))}"
+     
 
     subtitles_list3 = ["RESOLUCIÓN", "MONTO DE LA BECA"]
     contents_list3 = [resolucion, monto_beca]
