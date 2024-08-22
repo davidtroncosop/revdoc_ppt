@@ -170,7 +170,7 @@ def create_slide_from_row(prs, row):
     # Add timeline
     add_textbox(slide, Inches(5), Inches(1), Inches(2), Inches(0.3),
                 f"MOTIVO DEL CASO:\n {row.get('MOTIVO DEL CASO', 'N/A')}",
-                font_size=Pt(10), font_color=RGBColor(255, 255, 255))
+                font_size=Pt(12), font_color=RGBColor(255, 255, 255))
 
     add_textbox(slide, Inches(10.5), Inches(1), Inches(2.5), Inches(0.3),
                 f"Envía Solicitud: {row.get('Hora de inicio', 'N/A')}",
@@ -178,7 +178,7 @@ def create_slide_from_row(prs, row):
 
     # Create three cards
     card_width = Inches(4)
-    card_height = Inches(5)
+    card_height = Inches(5.3)
     spacing = Inches(0.5)
 
 # First card content
@@ -221,7 +221,7 @@ def create_slide_from_row(prs, row):
     contents_list3 = [resolucion, monto_beca]
 
     button_left = card_left + Inches(0.25)
-    button_top = card_top + card_height - Inches(1)
+    button_top = card_top + card_height - Inches(0.7)
     button_width = card_width - Inches(0.5)
     button_height = Inches(0.5)
     create_button(slide, button_left, button_top, button_width, button_height,
