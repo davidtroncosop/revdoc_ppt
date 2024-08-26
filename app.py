@@ -316,7 +316,7 @@ def create_slide_from_row(prs, row):
     spacing = Inches(0.5)
 
     # First card content
-    subtitles_list1 = ["MOTIVO", "DOCUMENTOS","MOTIVO DEL CASO"]
+    subtitles_list1 = ["MOTIVO", "MOTIVO DEL CASO","DOCUMENTOS"]
     contents_list1 = [
         row.get('Motivo solicitud.', 'N/A'),
         row.get('MOTIVO DEL CASO', 'No hay información disponible'),
