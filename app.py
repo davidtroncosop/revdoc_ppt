@@ -1,19 +1,149 @@
 import os
+import tempfile
 import streamlit as st
+from dotenv import load_dotenv
+import zipfile
+import fitz  # PyMuPDF
 import pandas as pd
+from PIL import Image as PILImage
+import io
+import requests
+import base64
+from openai import OpenAI
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.dml.color import RGBColor
-from openai import OpenAI # Configurar la clave API de OpenAI
-from dotenv import load_dotenv
 
 # Cargar variables de entorno desde .env
 load_dotenv()
 api_key = os.getenv('OPENAI_API_KEY')
 
+if not api_key:
+    st.error("API Key no encontrada. Asegúrate de que el archivo .env esté correctamente configurado.")
+    st.stop()
+
 client = OpenAI(api_key=api_key)
+
+# Funciones para analizar imágenes y documentos PDF
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def analyze_image(base64_image, api_key):
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Eres un asistente virtual especializado en la revisión de documentos escaneados. Analiza la imagen adjunta y extrae la siguiente información de manera breve y estructurada:\n\n- Tipo de documento (incluyendo documentos de identidad)\n- Nombres completos\n- Fechas relevantes\n- Institución emisora\n- Diagnóstico médico (si aplica)\n- Firmas y sellos presentes\n- Resumen de la carta** (si el documento es una carta o contiene una carta, proporciona un resumen conciso de su contenido)\n\nAdjunto una imagen para que la revises."
+                        },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        "max_tokens": 300
+    }
+
+    response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=payload)
+    
+    if response.status_code != 200:
+        st.error(f"Error: {response.status_code} - {response.text}")
+        return None
+    
+    response_data = response.json()
+    if 'error' in response_data:
+        st.error(f"API Error: {response_data['error']['message']}")
+    
+    return response_data
+
+def convert_pdf_page_to_image(pdf_path, page_num):
+    pdf_document = fitz.open(pdf_path)
+    page = pdf_document.load_page(page_num)
+    pix = page.get_pixmap()
+    img = PILImage.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    return img
+
+def process_pdfs_in_zip(zip_path, output_dir, api_key):
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(output_dir)
+
+    results = []
+
+    for root, dirs, files in os.walk(output_dir):
+        for file in files:
+            if file.endswith('.pdf'):
+                pdf_path = os.path.join(root, file)
+                folder_name = os.path.basename(os.path.dirname(pdf_path))
+                st.write(f"Processing {pdf_path}...")
+
+                pdf_document = fitz.open(pdf_path)
+                pdf_analysis = []
+                for page_num in range(len(pdf_document)):
+                    img = convert_pdf_page_to_image(pdf_path, page_num)
+                    temp_img_path = os.path.join(root, f"temp_image_page_{page_num}.png")
+                    img.save(temp_img_path)
+
+                    base64_image = encode_image(temp_img_path)
+                    result = analyze_image(base64_image, api_key)
+                    
+                    if result and 'choices' in result and len(result['choices']) > 0:
+                        analysis = result['choices'][0]['message']['content']
+                        pdf_analysis.append(analysis)
+                    else:
+                        pdf_analysis.append("Analysis failed")
+
+                results.append({
+                    "Folder": folder_name,
+                    "Analysis": " ".join(pdf_analysis)
+                })
+
+
+    # Convertir los resultados a un DataFrame
+    data = pd.DataFrame(results)
+
+    # Asegurarse de que 'Folder' sea de tipo string
+    data['Folder'] = data['Folder'].astype(str)
+
+    # Agrupar los datos por 'Folder' y concatenar la columna 'Analysis'
+    result = data.groupby('Folder')['Analysis'].apply(lambda x: ' '.join(x)).reset_index()
+
+    # Renombrar la columna para mayor claridad
+    result.columns = ['Folder', 'Análisis_concatenado']
+
+    return result
+
+def merge_analysis_with_excel(excel_path, pdf_analysis_results):
+    # Leer el archivo Excel
+    data2 = pd.read_excel(excel_path)
+
+    # Renombrar la columna 'RUT:' a 'Folder' si existe
+    if 'RUT:' in data2.columns:
+        data2.rename(columns={'RUT:': 'Folder'}, inplace=True)
+
+    # Asegurarse de que 'Folder' sea de tipo string en ambos DataFrames
+    data2['Folder'] = data2['Folder'].astype(str)
+    pdf_analysis_results['Folder'] = pdf_analysis_results['Folder'].astype(str)
+
+    # Realizar la unión de los dos DataFrames
+    merged_data = pd.merge(data2, pdf_analysis_results, on='Folder', how='left')
+    
+    return merged_data
+
 
 def generar_propuesta_resolucion(filas):
     resultados = []
@@ -38,19 +168,27 @@ Motivo solicitud: {fila['Motivo solicitud.']}
 ¿Ha recibido beneficios anteriormente? ¿Cuál?: {fila['¿Ha recibido beneficios anteriormente? ¿Cuál?']}
 Última fecha en que se entregó el Beneficio: {fila['Última fecha en que se entregó el Beneficio']}
 Deuda vencida en sistema: {fila['Deuda vencida en sistema']}
-Motivo, Breve explicación de la situación del estudiante: {fila['Motivo, Breve explicación de la situación del estudiante, por la cual se solicita la Beca.']}
 Análisis_concatenado: {fila['Análisis_concatenado']}
 
 Por favor, genera una respuesta en formato de tabla con las siguientes columnas, incluyendo el encabezado, usando guiones (-) como delimitadores:
 Propuesta Resolución-RESOLUCIÓN-MONTO DE LA BECA-MOTIVO DEL CASO-DOCUMENTOS
+
+**La columna "RESOLUCIÓN" debe contener la decisión tomada sobre la solicitud (aprobada o rechazada) y la justificación basada en los criterios establecidos.**
+
+**La columna "MOTIVO DEL CASO" debe contener un resumen muy breve de la situación presentada por el estudiante en su carta de solicitud, incluyendo detalles como problemas económicos, personales o académicos mencionados. Esta columna no debe repetir el contenido de la "RESOLUCIÓN", sino que debe reflejar la situación específica del estudiante tal como se describe en la carta.**
+
+**En la columna "MOTIVO DEL CASO",  proporciona una descripción detallada en el siguiente formato: "Se informa lo siguiente: >[Detalle1]. >[Detalle2]. >[Detalle3].". Asegúrate de incluir todos los detalles relevantes separados por punto y coma (;), sin espacios adicionales.**
+
 Ejemplo:
 Propuesta Resolución-RESOLUCIÓN-MONTO DE LA BECA-MOTIVO DEL CASO-DOCUMENTOS
-Aprobada-La solicitud de beca se aprueba...-Monto a determinar según normativa-El estudiante solicita una beca porque...-Carta de solicitud de beca; Cartola Hogar; Certificado de remuneraciones; FICHA SOCIOECONOMICA
-Rechazada-La solicitud de beca se rechaza porque el estudiante no cumple con el requisito mínimo de PPE.-N/A-El estudiante no cumple con el requisito mínimo de PPE.-N/A
+Aprobada-La solicitud de beca se aprueba...-Monto a determinar según normativa-Los Documentos informan lo siguiente >Familia extensa. >Un integrante genera ingresos formales (pensión). >El estudiante no encuentra empleo y recibe ayuda económica de su tío y abuela. >Postulación FUAS: octubre de 2022. >No presenta resultados MINEDUC. >Se sugiere aprobar la solicitud.-Carta de solicitud de beca; Registro Social de Hogares; Certificado de remuneraciones; Finiquitos; Certificado de cotizaciones; Licencias medicas; Comprobante de gastos mensuales; Certificado de desempleo
+Rechazada-La solicitud de beca se rechaza porque...-Documentos validados por la Trabajadora Social, quien informa lo siguiente: >Familia extensa. >Un integrante genera ingresos formales (pensión). >El estudiante no encuentra empleo y recibe ayuda económica de su tío y abuela. >Postulación FUAS: octubre de 2022. >No presenta resultados MINEDUC. >Se sugiere aprobar la solicitud.-Carta de solicitud de beca; Registro Social de Hogares; Certificado de remuneraciones; Finiquitos; Certificado de cotizaciones; Licencias medicas; Comprobante de gastos mensuales; Certificado de desempleo
 
-**Asegúrate de que cada valor esté correctamente delimitado por guiones y de que no haya espacios adicionales antes o después de los guiones. Incluye solo las 5 columnas especificadas y usa punto y coma para separar múltiples documentos en la columna DOCUMENTOS.**
-"""
+**Asegúrate de que cada valor esté correctamente delimitado por guiones y de que no haya espacios adicionales antes o después de los guiones. Incluye solo las 5 columnas especificadas y usa punto y coma para separar múltiples documentos en la columna DOCUMENTOS.** 
+""" 
 
+
+        
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -84,8 +222,7 @@ Rechazada-La solicitud de beca se rechaza porque el estudiante no cumple con el 
         # Agregar las columnas a la lista de resultados
         resultados.append(columnas)
 
-    return resultados  # <-- Devuelve la lista de listas
-
+    return resultados
 
 def add_textbox(slide, left, top, width, height, text, font_size=Pt(14), bold=False, font_color=RGBColor(0, 0, 0), alignment=PP_ALIGN.LEFT):
     textbox = slide.shapes.add_textbox(left, top, width, height)
@@ -142,6 +279,7 @@ def create_button(slide, left, top, width, height, text, color):
     button.text_frame.text = text
     button.text_frame.paragraphs[0].font.color.rgb = RGBColor(255, 255, 255)  # White text
 
+
 def create_slide_from_row(prs, row):
     # Create slide
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
@@ -167,10 +305,6 @@ def create_slide_from_row(prs, row):
                 f"Ingresa: {row.get('Año y Semestre de ingreso', 'N/A')}",
                 font_size=Pt(10), font_color=RGBColor(255, 255, 255))
     
-    # Add timeline
-    add_textbox(slide, Inches(5), Inches(1), Inches(2), Inches(0.3),
-                f"MOTIVO DEL CASO:\n {row.get('MOTIVO DEL CASO', 'N/A')}",
-                font_size=Pt(12), font_color=RGBColor(255, 255, 255))
 
     add_textbox(slide, Inches(10.5), Inches(1), Inches(2.5), Inches(0.3),
                 f"Envía Solicitud: {row.get('Hora de inicio', 'N/A')}",
@@ -181,11 +315,12 @@ def create_slide_from_row(prs, row):
     card_height = Inches(5.3)
     spacing = Inches(0.5)
 
-# First card content
-    subtitles_list1 = ["MOTIVO", "DOCUMENTOS"]  # Agrega "MOTIVO DEL CASO"
+    # First card content
+    subtitles_list1 = ["MOTIVO", "DOCUMENTOS","MOTIVO DEL CASO"]
     contents_list1 = [
         row.get('Motivo solicitud.', 'N/A'),
-        row.get('Análisis_concatenado', 'No hay información disponible')
+        row.get('MOTIVO DEL CASO', 'No hay información disponible'),
+        row.get('DOCUMENTOS', 'No hay información disponible')
     ]
 
     card_left = Inches(0.1) + 0 * (card_width + spacing)
@@ -216,7 +351,6 @@ def create_slide_from_row(prs, row):
     resolucion = row.get('RESOLUCIÓN', 'No hay información disponible')
     monto_beca = f"${'{:,}'.format(row.get('Plan de Retención', 0.0))}"
      
-
     subtitles_list3 = ["RESOLUCIÓN", "MONTO DE LA BECA"]
     contents_list3 = [resolucion, monto_beca]
 
@@ -243,42 +377,77 @@ def create_slide_from_row(prs, row):
     create_button(slide, button_left, button_top, button_width, button_height,
                   "Resolución", RGBColor(13, 34, 60))   # Blue color
 
-st.title('Generador de Propuestas de Resolución y Presentaciones')
-
-uploaded_file = st.file_uploader("Carga un archivo Excel", type=["xlsx"])
-
-if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file)
-
-    st.write('Datos del archivo cargado:')
-    st.dataframe(df)
-
-    propuestas_resolucion = generar_propuesta_resolucion(df)
-
-    # Agregar los resultados al dataframe original
-    df['Propuesta Resolución'], df['RESOLUCIÓN'], df['MONTO DE LA BECA'], df['MOTIVO DEL CASO'], df['DOCUMENTOS'] = zip(*propuestas_resolucion)
-
-    # Crear un nuevo archivo Excel con los resultados
-    excel_output = 'propuestas_resolucion.xlsx'
-    df.to_excel(excel_output, index=False)
-
-    # Crea la presentación de PowerPoint
+def create_presentation_from_dataframe(df, output_path):
     prs = Presentation()
     prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
-    # Crea una diapositiva para cada fila
     for _, row in df.iterrows():
         create_slide_from_row(prs, row)
 
-    ppt_output = 'propuestas_resolucion.pptx'
-    prs.save(ppt_output)
+    prs.save(output_path)
 
-    st.success('¡Propuestas de resolución generadas y guardadas!')
+# Interfaz de usuario Streamlit
+st.title("Análisis de documentos PDF y generación de propuestas")
 
-    with open(excel_output, 'rb') as excel_file:
-        st.download_button('Descargar archivo Excel', data=excel_file, file_name=excel_output)
+uploaded_zip = st.file_uploader("Sube un archivo ZIP con PDFs", type=["zip"])
+uploaded_excel = st.file_uploader("Sube un archivo Excel con datos de estudiantes", type=["xlsx"])
 
-    with open(ppt_output, 'rb') as ppt_file:
-        st.download_button('Descargar presentación PowerPoint', data=ppt_file, file_name=ppt_output)
+if uploaded_zip and uploaded_excel:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        zip_path = os.path.join(temp_dir, "uploaded.zip")
+        with open(zip_path, "wb") as zip_file:
+            zip_file.write(uploaded_zip.getbuffer())
 
+        excel_path = os.path.join(temp_dir, "uploaded.xlsx")
+        with open(excel_path, "wb") as excel_file:
+            excel_file.write(uploaded_excel.getbuffer())
+
+        pdf_analysis_results = process_pdfs_in_zip(zip_path, temp_dir, api_key)
+        
+        # Fusionar el análisis de PDF con el DataFrame del Excel
+        df = merge_analysis_with_excel(excel_path, pdf_analysis_results)
+        
+        # Guardar el DataFrame actualizado con el análisis
+        df.to_excel(os.path.join(temp_dir, "excel_con_analisis.xlsx"), index=False)
+
+        st.success("Análisis de PDFs completado y fusionado con el Excel original.")
+
+
+
+        propuestas = generar_propuesta_resolucion(df)
+        df_propuestas = pd.DataFrame(propuestas, columns=["Propuesta Resolución", "RESOLUCIÓN", "MONTO DE LA BECA", "MOTIVO DEL CASO", "DOCUMENTOS"])
+        df_final = pd.concat([df, df_propuestas], axis=1)
+        df_final.to_excel(os.path.join(temp_dir, "resultado_final.xlsx"), index=False)
+
+        st.success("Propuesta de resolución generada y guardada en resultado_final.xlsx")
+
+        pptx_path = os.path.join(temp_dir, "presentacion_estudiantes.pptx")
+        create_presentation_from_dataframe(df_final, pptx_path)
+
+        st.success("Presentación PowerPoint generada y guardada en presentacion_estudiantes.pptx")
+
+        # Ofrecer los archivos para descargar
+        with open(os.path.join(temp_dir, "excel_con_analisis.xlsx"), "rb") as file:
+            st.download_button(
+                label="Descargar Excel con análisis de PDFs",
+                data=file,
+                file_name="excel_con_analisis.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        with open(os.path.join(temp_dir, "resultado_final.xlsx"), "rb") as file:
+            st.download_button(
+                label="Descargar resultado final",
+                data=file,
+                file_name="resultado_final.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+        with open(pptx_path, "rb") as file:
+            st.download_button(
+                label="Descargar presentación PowerPoint",
+                data=file,
+                file_name="presentacion_estudiantes.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
